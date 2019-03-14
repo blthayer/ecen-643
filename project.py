@@ -16,7 +16,7 @@ import logging as log
 SEED = 42
 
 # Create module level logger.
-LOG_LEVEL = log.DEBUG
+LOG_LEVEL = log.INFO
 log.basicConfig(level=LOG_LEVEL)
 
 
@@ -38,33 +38,6 @@ def time_to_event(random_state, rho):
     """
     # x = -ln(z) / rho
     return -np.log(random_state.rand()) / rho
-
-
-def get_load_level(time):
-    """Determine the current load level given the time in hours.
-
-    :param time: float representing current time in hours.
-
-    :returns load: Current system load in MW.
-
-    NOTE: If this weren't a simple class project, this hard-coded
-    function with if/else statements would be terrible.
-    """
-    # Use modulus to determine what hour of the day we're in.
-    r = time % 24
-
-    if 0 <= r < 4:
-        return 60
-    elif 4 <= r < 8:
-        return 105
-    elif 8 <= r < 12:
-        return 205
-    elif 12 <= r < 16:
-        return 105
-    elif 16 <= r < 24:
-        return 60
-    else:
-        raise ValueError('Something is wrong with your logic.')
 
 
 def load_served(gens, t_lines, load):
@@ -173,10 +146,18 @@ class TwoStateComponent:
         self.state = not self.state
         self.tte = self.time_to_event()
 
+    def decrease_tte(self, delta):
+        """Decrease time to event."""
+        self.tte = self.tte - delta
+
 
 class TransmissionLine(TwoStateComponent):
     """Class for transmission lines, which have different rates based
     on the weather.
+
+    I'm wondering if inheritance was really the way to go here. It made
+    this slightly complicated, though TwoStateComponents would have been
+    rewritten otherwise...
     """
 
     def __init__(self, weather, fr_nw, fr_aw, rr, random_state, name=''):
@@ -226,6 +207,76 @@ class TransmissionLine(TwoStateComponent):
             self.prev_weather_state = self.weather.state
 
         return self._tte
+
+    def decrease_tte(self, delta):
+        """Decrease the tte by delta."""
+        # Due to not so great design, we need to be careful about the
+        # tte being updated after a weather change. The tte gets
+        # redrawn if weather just changed state. In that case, we do not
+        # want to decrease it, since it's a fresh draw.
+        if self.prev_weather_state != self.weather.state:
+            delta = 0
+
+        self.tte = self.tte - delta
+
+
+class Load:
+    """Class for representing the demand. Property names and methods
+    will line up with TwoStateComponent so it can be used in the same
+    way.
+    """
+    # Start times for each load condition.
+    START_TIMES = np.array([0, 4, 8, 12, 16])
+
+    # Load corresponding to the end times.
+    LOAD = np.array([60, 105, 205, 105, 60])
+
+    def __init__(self):
+        # Hard-code our starting index to be 0.
+        self.idx = 0
+
+        # Set load state.
+        self.state = self.LOAD[self.idx]
+
+        # Update the tte.
+        self.tte = self.time_to_event()
+
+        # Hard-code the name.
+        self.name = 'Load'
+
+    def __repr__(self):
+        return self.name
+
+    def time_to_event(self):
+        # Compute the time between the current time and the next
+        # event.
+        try:
+            tte = self.START_TIMES[self.idx + 1] - self.START_TIMES[self.idx]
+        except IndexError:
+            # If self.idx + 1 is out of bounds, we're wrapping the day.
+            tte = 24 - self.START_TIMES[self.idx]
+
+        return tte
+
+    def change_state_update_tte(self):
+        # Update index.
+        idx = self.idx + 1
+
+        # If the index has hit the length of the array, reset it.
+        if idx == self.START_TIMES.shape[0]:
+            idx = 0
+
+        # Set new index.
+        self.idx = idx
+
+        # Update state.
+        self.state = self.LOAD[self.idx]
+
+        # Update tte.
+        self.tte = self.time_to_event()
+
+    def decrease_tte(self, delta):
+        self.tte = self.tte - delta
 
 
 def main():
@@ -285,54 +336,92 @@ def main():
     ]
 
     ####################################################################
+    # LOAD
+    ####################################################################
+    load = Load()
+
+    ####################################################################
     # PERFORM MONTE CARLO
     ####################################################################
+    # Flow:
+    # - Determine time to next event.
+    # - If load was not served between the last event and this upcoming
+    #   one, update running time of un-served load.
+    # - Make the next event occur by changing the state of the relevant
+    #   component.
+    # - Update time.
+    # - Update tte's for all other components.
+    # - Determine whether or not load is served.
+
     # Create list of all components.
-    components = [*gens, weather, *t_lines]
+    components = [*gens, weather, *t_lines, load]
 
     # Initialize the time to 0.
     time = 0
     it_count = 0
 
-    # TODO: Update for convergence criteria.
-    while time < 8760 and it_count < 12:
-        # TODO:
-        #   1) Load needs to be counted as a "next event"
-        #   2) tte's need to be updated as the time progresses
+    # Initialize variables for handling un-served load.
+    time_unserved = 0
+    # ls --> load served. Hard-coding that we start serving all load.
+    ls = True
 
+    # TODO: Update for convergence criteria.
+    while time < 8760 and it_count < 100:
         # Sort components based on their time to event (tte). The
         # component with the shortest time to event will be in position
         # 0.
+        # NOTE: This may be faster if we used a priority queue.
         components.sort(key=lambda x: x.tte)
 
-        # Update the time.
-        time += components[0].tte
+        # Grab time delta to next event
+        delta = components[0].tte
 
-        log_str = ('At time {:.2f}, {} transitioned '
-                   + 'from {} to {}').format(time, components[0].name,
-                                             components[0].state,
-                                             not components[0].state)
-        log.debug(log_str)
+        # Sanity check:
+        if delta < 0:
+            raise ValueError('delta is < 0 ?')
+
+        # Check if the previous loop iteration failed to serve load.
+        if not ls:
+            log.info('Load could not be served from time '
+                     + '{:.2f} to {:.2f}!'.format(time, time + delta))
+            time_unserved += delta
+
+        # Grab pre-event state of component.
+        pre_event_state = components[0].state
 
         # Toggle the state of the component and update it's tte.
         components[0].change_state_update_tte()
 
-        # Get the current load level for this time.
-        load = get_load_level(time)
+        # Update time.
+        time += delta
+
+        # Update tte's for all other components.
+        for c in components[1:]:
+            c.decrease_tte(delta)
+
+        # Log event.
+        log_str = (
+            'At time {:.2f}, {} transitioned from {} to {}'
+            ).format(time, components[0].name, pre_event_state,
+                     components[0].state)
+        log.debug(log_str)
 
         # Determine if we're able to meet load. ls --> "load_served"
-        ls = load_served(gens, t_lines, load)
-
-        if not ls:
-            log.debug('Load cannot be served!')
+        ls = load_served(gens, t_lines, load.state)
 
         # Update iteration counter.
         it_count += 1
 
+    print('\n\n')
+    print('*' * 80)
+    # TODO:
+    #   1) Ensure LOLP calculation is correct.
+    #   2) Ensure that we're exiting the loop at the correct spot such
+    #      that time_unserved and time "line up"
+    #   3) Calculate frequency of load loss.
+    print('LOLP: {:.4f}'.format(time_unserved/time))
     pass
 
 
 if __name__ == '__main__':
     main()
-
-    print('hooray')
