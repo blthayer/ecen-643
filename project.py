@@ -8,6 +8,10 @@ and Mitra, 2019.
 
 The file ECEN643_Project_2019.pdf describes what we're trying to
 accomplish here.
+
+This module has plenty of hard-coding in it. I'm actively fighting my
+urge to make everything general, and accepting that this is a project
+with a static specification, and life will be better if I hard-code.
 """
 import numpy as np
 import logging as log
@@ -358,6 +362,7 @@ def main():
 
     # Initialize the time to 0.
     time = 0
+    total_time = 0
     it_count = 0
 
     # Initialize variables for handling un-served load.
@@ -365,8 +370,14 @@ def main():
     # ls --> load served. Hard-coding that we start serving all load.
     ls = True
 
-    # TODO: Update for convergence criteria.
-    while time < 8760 and it_count < 100:
+    # Initialize variables for tracking convergence
+    # tus --> time un-served
+    tus_arr = np.array([])
+    year = 0
+
+    # Note that we have a "break" statement in the loop, so we'll loop
+    # for a large count.
+    while it_count < 100000:
         # Sort components based on their time to event (tte). The
         # component with the shortest time to event will be in position
         # 0.
@@ -382,8 +393,8 @@ def main():
 
         # Check if the previous loop iteration failed to serve load.
         if not ls:
-            log.info('Load could not be served from time '
-                     + '{:.2f} to {:.2f}!'.format(time, time + delta))
+            log.debug('Load could not be served from time '
+                      + '{:.2f} to {:.2f}!'.format(time, time + delta))
             time_unserved += delta
 
         # Grab pre-event state of component.
@@ -392,8 +403,49 @@ def main():
         # Toggle the state of the component and update it's tte.
         components[0].change_state_update_tte()
 
-        # Update time.
-        time += delta
+        # Either update or reset time.
+        # Check to see if we've moved into a new year (hard-code 8760)
+        if time > 8760:
+            # Log it.
+            log.info('Year {} complete.'.format(year))
+
+            # Bump the year counter and total time.
+            year += 1
+            total_time += time
+
+            # Reset the time.
+            time = 0
+
+            # Put the unserved time in the array and reset it.
+            tus_arr = np.append(tus_arr, time_unserved)
+            time_unserved = 0
+
+            # Compute expected value: I^hat = sum(I_i) / N_y
+            # Note: it would be more efficient to just keep a running
+            # total.
+            i_hat = tus_arr.sum() / year
+
+            # Compute the variance:
+            # Var(I_hat) = sum((I_i - I_hat)^2) / N_y^2
+            var_i_hat = np.power(tus_arr - i_hat, 2).sum() / (year ** 2)
+
+            # Compute covariance: COV = sqrt(Var(I_hat)) / I_hat
+            cov = np.sqrt(var_i_hat) / i_hat
+
+            # Log.
+            log.info('Coefficient of variation: {:.3f}'.format(cov))
+
+            cov_alt = np.std(tus_arr) / np.mean(tus_arr)
+
+            log.info('Alternate COV: {:.3f}'.format(cov_alt))
+
+            # We're done if less than 0.05.
+            if cov < 0.05 and year > 50:
+                log.info('Exiting Monte Carlo simulation.')
+                break
+
+        else:
+            time += delta
 
         # Update tte's for all other components.
         for c in components[1:]:
@@ -412,6 +464,10 @@ def main():
         # Update iteration counter.
         it_count += 1
 
+    log.info('While loop broken after {} iterations.'.format(it_count))
+    log.info('Total simulation time: {}'.format(total_time))
+
+    # Report final statistics.
     print('\n\n')
     print('*' * 80)
     # TODO:
@@ -419,7 +475,7 @@ def main():
     #   2) Ensure that we're exiting the loop at the correct spot such
     #      that time_unserved and time "line up"
     #   3) Calculate frequency of load loss.
-    print('LOLP: {:.4f}'.format(time_unserved/time))
+    print('LOLP: {:.4f}'.format(tus_arr.sum()/total_time))
     pass
 
 
