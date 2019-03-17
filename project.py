@@ -24,15 +24,15 @@ LOG_LEVEL = log.INFO
 log.basicConfig(level=LOG_LEVEL)
 
 
-def time_to_event(random_state, rho):
+def time_to_event(rho, rn):
     """Helper function to compute the time to next event given a
     RandomState and mean^-1 of the exponential distribution.
 
     See equation 6.11 on page 173 of the textbook.
 
-    :param random_state: numpy.random.RandomState instance.
     :param rho: 1/rho is the mean of the exponential distribution to
            draw from.
+    :param rn: OPTIONAL. Random number on interval [0, 1)
 
     :returns Time to next event in units of rho.
 
@@ -40,8 +40,9 @@ def time_to_event(random_state, rho):
     and rho is 0.01/hr (failure rate), the time to next event (failure)
     will be ~5 hours
     """
+
     # x = -ln(z) / rho
-    return -np.log(random_state.rand()) / rho
+    return -np.log(rn) / rho
 
 
 def load_served(gens, t_lines, load):
@@ -112,9 +113,18 @@ class TwoStateComponent:
         # Whether component is up or down - start up.
         self.state = True
 
+        # Track a random number.
+        self.rn = self.get_rn()
+
+        # Track the previously drawn random number.
+        self.prev_rn = self.rn
+
         # Set the time to the next event. Note tte has both a getter and
         # a setter.
         self.tte = self.time_to_event()
+
+        # Set time since last event.
+        self.tse = 0
 
     def __repr__(self):
         return self.name
@@ -135,24 +145,55 @@ class TwoStateComponent:
     def tte(self, value):
         self._tte = value
 
-    def time_to_event(self):
+    def time_to_event(self, rn=None):
         """Compute the time to the next event, depending on self.state.
         """
+        # Choose the rate based on state.
         if self.state:
             rate = self.failure_rate
         else:
             rate = self.repair_rate
 
-        return time_to_event(random_state=self.random_state, rho=rate)
+        # Default to using self.rn
+        if rn is None:
+            rn = self.rn
 
-    def change_state_update_tte(self):
+        # Draw tte.
+        tte = time_to_event(rn=rn, rho=rate)
+
+        # Update previous rn.
+        self.prev_rn = self.rn
+
+        # Update rn.
+        self.rn = self.get_rn()
+
+        # Return.
+        return tte
+
+    def change_state_update_times(self):
         """Flip self.state, update self.tte"""
         self.state = not self.state
         self.tte = self.time_to_event()
+        self.tse = 0
 
-    def decrease_tte(self, delta):
-        """Decrease time to event."""
-        self.tte = self.tte - delta
+    def update_times(self, delta):
+        """Update time to event (tte) and time since event (tse)."""
+        # Decrease tte.
+        tte = self.tte - delta
+
+        # If tte went negative, set to 0.
+        if tte < 0:
+            tte = 0
+
+        # Set tte.
+        self.tte = tte
+
+        # Increase tse.
+        self.tse = self.tse + delta
+
+    def get_rn(self):
+        """Method to get random number."""
+        return self.random_state.rand()
 
 
 class TransmissionLine(TwoStateComponent):
@@ -185,7 +226,8 @@ class TransmissionLine(TwoStateComponent):
         self.fr_nw = fr_nw
         self.fr_aw = fr_aw
 
-        # Call the super constructor.
+        # Call the super constructor. Note failure_rate has a getter
+        # which determines failure rate based on the weather.
         super().__init__(failure_rate=self.failure_rate, repair_rate=rr,
                          random_state=random_state, name=name)
 
@@ -201,27 +243,28 @@ class TransmissionLine(TwoStateComponent):
     # Override the TwoStateComponent's getter method for tte.
     @TwoStateComponent.tte.getter
     def tte(self):
-        # If the weather's state has changed, we need to reset our tte.
+        # If the weather's state has changed, we need to update our tte.
         if self.prev_weather_state != self.weather.state:
-            log.debug('Transmission line rate and tte changed due to weather.')
-            # Reset the tte via the setter in TwoStateComponent.
-            self.tte = self.time_to_event()
+            # Draw time_to_event based on the previously drawn random
+            # number.
+            tte = self.time_to_event(rn=self.prev_rn)
+
+            # Decrease the time to event by the time since event.
+            tte = tte - self.tse
+
+            # Zero it out if it's less than 0.
+            if tte < 0:
+                tte = 0
+
+            # Assign (note this uses the setter to set self._tte).
+            self.tte = tte
 
             # Reset the weather's previous state.
             self.prev_weather_state = self.weather.state
 
+            log.debug('Transmission line rate and tte changed due to weather.')
+
         return self._tte
-
-    def decrease_tte(self, delta):
-        """Decrease the tte by delta."""
-        # Due to not so great design, we need to be careful about the
-        # tte being updated after a weather change. The tte gets
-        # redrawn if weather just changed state. In that case, we do not
-        # want to decrease it, since it's a fresh draw.
-        if self.prev_weather_state != self.weather.state:
-            delta = 0
-
-        self.tte = self.tte - delta
 
 
 class Load:
@@ -262,7 +305,7 @@ class Load:
 
         return tte
 
-    def change_state_update_tte(self):
+    def change_state_update_times(self):
         # Update index.
         idx = self.idx + 1
 
@@ -279,7 +322,7 @@ class Load:
         # Update tte.
         self.tte = self.time_to_event()
 
-    def decrease_tte(self, delta):
+    def update_times(self, delta):
         self.tte = self.tte - delta
 
 
@@ -400,8 +443,8 @@ def main():
         # Grab pre-event state of component.
         pre_event_state = components[0].state
 
-        # Toggle the state of the component and update it's tte.
-        components[0].change_state_update_tte()
+        # Toggle the state of the component and update it's tte and tse.
+        components[0].change_state_update_times()
 
         # Either update or reset time.
         # Check to see if we've moved into a new year (hard-code 8760)
@@ -447,9 +490,9 @@ def main():
         else:
             time += delta
 
-        # Update tte's for all other components.
+        # Update tte and tse for all other components.
         for c in components[1:]:
-            c.decrease_tte(delta)
+            c.update_times(delta)
 
         # Log event.
         log_str = (
