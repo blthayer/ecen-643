@@ -24,7 +24,7 @@ LOG_LEVEL = log.INFO
 log.basicConfig(level=LOG_LEVEL)
 
 
-def time_to_event(rho, rn):
+def time_to_event(*, rho, rn):
     """Helper function to compute the time to next event given a
     RandomState and mean^-1 of the exponential distribution.
 
@@ -164,25 +164,29 @@ class TwoStateComponent:
         # Update previous rn.
         self.prev_rn = self.rn
 
-        # Update rn.
+        # Redraw rn.
         self.rn = self.get_rn()
 
         # Return.
         return tte
 
     def change_state_update_times(self):
-        """Flip self.state, update self.tte"""
+        """Flip self.state, update self.tte, reset self.tse."""
         self.state = not self.state
         self.tte = self.time_to_event()
         self.tse = 0
 
     def update_times(self, delta):
-        """Update time to event (tte) and time since event (tse)."""
+        """Update time to event (tte) and time since event (tse), given
+        a change in time (delta).
+        """
         # Decrease tte.
         tte = self.tte - delta
 
-        # If tte went negative, set to 0.
+        # If tte went negative, set to 0. This should only happen for
+        # transmission lines when the weather changes state.
         if tte < 0:
+            log.debug('TTE for {} is < 0. Setting to 0.'.format(self.name))
             tte = 0
 
         # Set tte.
@@ -255,6 +259,8 @@ class TransmissionLine(TwoStateComponent):
             # Zero it out if it's less than 0.
             if tte < 0:
                 tte = 0
+                log.debug("Due to weather change, {}'s tte is now 0.".format(
+                    self.name))
 
             # Assign (note this uses the setter to set self._tte).
             self.tte = tte
@@ -463,27 +469,14 @@ def main():
             tus_arr = np.append(tus_arr, time_unserved)
             time_unserved = 0
 
-            # Compute expected value: I^hat = sum(I_i) / N_y
-            # Note: it would be more efficient to just keep a running
-            # total.
-            i_hat = tus_arr.sum() / year
-
-            # Compute the variance:
-            # Var(I_hat) = sum((I_i - I_hat)^2) / N_y^2
-            var_i_hat = np.power(tus_arr - i_hat, 2).sum() / (year ** 2)
-
-            # Compute covariance: COV = sqrt(Var(I_hat)) / I_hat
-            cov = np.sqrt(var_i_hat) / i_hat
+            # Compute the estimated coefficient of variation.
+            cov = np.std(tus_arr) / np.mean(tus_arr)
 
             # Log.
             log.info('Coefficient of variation: {:.3f}'.format(cov))
 
-            cov_alt = np.std(tus_arr) / np.mean(tus_arr)
-
-            log.info('Alternate COV: {:.3f}'.format(cov_alt))
-
             # We're done if less than 0.05.
-            if cov < 0.05 and year > 50:
+            if cov < 0.05 and year > 1:
                 log.info('Exiting Monte Carlo simulation.')
                 break
 
