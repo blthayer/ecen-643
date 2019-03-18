@@ -418,11 +418,16 @@ def main():
     time_unserved = 0
     # ls --> load served. Hard-coding that we start serving all load.
     ls = True
+    # In order to track frequency, we need to look for changes in ls.
+    prev_ls = True
+    # We'll also count loss of load (lol) occurrences.
+    lol_count = 0
 
     # Initialize variables for tracking convergence
     # tus --> time un-served
     tus_arr = np.array([])
     year = 0
+    cov_arr = np.array([])
 
     # Note that we have a "break" statement in the loop, so we'll loop
     # for a large count.
@@ -446,15 +451,24 @@ def main():
                       + '{:.2f} to {:.2f}!'.format(time, time + delta))
             time_unserved += delta
 
+            # Check to see if this is a new event.
+            if prev_ls:
+                lol_count += 1
+
+        # Set prev_ls to ls.
+        prev_ls = ls
+
         # Grab pre-event state of component.
         pre_event_state = components[0].state
 
         # Toggle the state of the component and update it's tte and tse.
         components[0].change_state_update_times()
 
-        # Either update or reset time.
         # Check to see if we've moved into a new year (hard-code 8760)
         if time > 8760:
+            # If we've moved into a new year, compute loss of load
+            # information for convergence criterion.
+
             # Log it.
             log.info('Year {} complete.'.format(year))
 
@@ -471,6 +485,7 @@ def main():
 
             # Compute the estimated coefficient of variation.
             cov = np.std(tus_arr) / np.mean(tus_arr)
+            cov_arr = np.append(cov_arr, cov)
 
             # Log.
             log.info('Coefficient of variation: {:.3f}'.format(cov))
@@ -481,6 +496,7 @@ def main():
                 break
 
         else:
+            # We haven't crossed into a new year - increment the time.
             time += delta
 
         # Update tte and tse for all other components.
@@ -501,17 +517,13 @@ def main():
         it_count += 1
 
     log.info('While loop broken after {} iterations.'.format(it_count))
-    log.info('Total simulation time: {}'.format(total_time))
+    log.info('Total simulation "time": {} hours'.format(total_time))
 
     # Report final statistics.
-    print('\n\n')
-    print('*' * 80)
-    # TODO:
-    #   1) Ensure LOLP calculation is correct.
-    #   2) Ensure that we're exiting the loop at the correct spot such
-    #      that time_unserved and time "line up"
-    #   3) Calculate frequency of load loss.
-    print('LOLP: {:.4f}'.format(tus_arr.sum()/total_time))
+    print('\n' + '*' * 80)
+    print('Loss of Load Probability: {:.4f}'.format(tus_arr.sum()/total_time))
+    print('Frequency of Load Loss: {:.4f}/year'.format(lol_count /
+                                                       (total_time/8760)))
     pass
 
 
