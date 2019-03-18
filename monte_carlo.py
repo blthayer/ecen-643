@@ -1,5 +1,5 @@
 """
-Module for the ECEN-643 project, Spring 2019.
+Module for the Monte Carlo portion of the ECEN-643 project, Spring 2019.
 Author: Brandon Thayer
 
 Note references to "the textbook" refer to Electric Power Grid
