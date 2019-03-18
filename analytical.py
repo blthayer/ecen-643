@@ -147,11 +147,14 @@ def main():
     # 6:            1U, 2D              A
     # 7:            1D, 2D              A
     #
+    # A state transition diagram can be found here:
+    # https://docs.google.com/drawings/d/1mVesembtzwQwbGSgrmVVeQw9CVN5ux2TfFDJzt2iiNQ/edit?usp=sharing
+
     # Initialize the 8x8.
     tw_r = np.zeros([8, 8])
     # Fill the matrix by going state by state and placing rates OUT of
     # the state in question. Read diagram left to right, top to bottom.
-    # TODO: Put diagram in repo?
+
     # First row of diagram:
     # 2
     tw_r[2, 0] = t_rr
