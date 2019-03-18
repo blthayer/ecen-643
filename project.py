@@ -350,8 +350,7 @@ def main():
     # (1/8hr)
     gen_repair_rate = 1 / 8
 
-    # Use list comprehension to create list of three identical
-    # generators.
+    # Create list of three identical generators via list comprehension.
     gens = [
         TwoStateComponent(failure_rate=gen_failure_rate,
                           repair_rate=gen_repair_rate,
@@ -447,12 +446,18 @@ def main():
 
         # Check if the previous loop iteration failed to serve load.
         if not ls:
+            # Log the unserved load event.
             log.debug('Load could not be served from time '
                       + '{:.2f} to {:.2f}!'.format(time, time + delta))
+
+            # Increment the unserved time by the time to the next
+            # event.
             time_unserved += delta
 
-            # Check to see if this is a new event.
+            # Check to see if this is a new loss of load event.
             if prev_ls:
+                # Increment the loss of load counter if this is a loss
+                # of load event, but load was being served before.
                 lol_count += 1
 
         # Set prev_ls to ls.
@@ -472,11 +477,9 @@ def main():
             # Log it.
             log.info('Year {} complete.'.format(year))
 
-            # Bump the year counter and total time.
+            # Bump the year counter and total time, reset time.
             year += 1
             total_time += time
-
-            # Reset the time.
             time = 0
 
             # Put the unserved time in the array and reset it.
