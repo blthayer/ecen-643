@@ -5,6 +5,7 @@ Author: Brandon Thayer
 """
 
 import numpy as np
+import pandas as pd
 
 ########################################################################
 # HELPER FUNCTIONS
@@ -53,7 +54,7 @@ def p_from_r(r):
     c = np.zeros([b.shape[0], 1])
 
     # Replace the first element with a 1.
-    c[0] = 1
+    c[0, 0] = 1
 
     # Solve for steady state probabilities.
     return np.linalg.solve(b, c)
@@ -229,15 +230,15 @@ def main():
     d_d = np.array([60, 105, 205, 105])
 
     ####################################################################
-    # COMPUTE LOSS OF LOAD PROBABILITY
+    # COMPUTE STATE PROBABILITIES AND DETERMINE IF DEMAND IS SERVED
     ####################################################################
     # Do some nasty, hard-coded nested for-loops to get all possible
     # system states, their probabilities, and whether or not demand
     # is served.
 
-    # Initialize failure probability.
-    # TODO: Create a table of all system states?
-    lolp = 0
+    # Initialize list which will track states, probabilities,
+    # loss of load, etc.
+    data = []
 
     # Loop over g12.
     for g12_idx in range(len(g12_c)):
@@ -260,15 +261,119 @@ def main():
                     # Determine whether or not demand is met.
                     demand_met = system_capacity >= d_d[d_idx]
 
-                    if not demand_met:
-                        # Compute the probability of being in this
-                        # system state.
-                        p = (g12_p[g12_idx, 0] * g3_p[g3_idx, 0]
-                             * tw_p[tw_idx, 0] * d_p[d_idx, 0])
+                    # Compute the probability of being in this
+                    # system state.
+                    p = (g12_p[g12_idx, 0] * g3_p[g3_idx, 0]
+                         * tw_p[tw_idx, 0] * d_p[d_idx, 0])
 
-                        lolp += p
+                    # Create data entry. BE CAREFUL! The order of this
+                    # array needs to match the order of the "columns"
+                    # argument given to the DataFrame constructor.
+                    data.append([g12_idx, g3_idx, tw_idx, d_idx, demand_met,
+                                 p])
 
-    print('Loss of Load Probability: {:.4f}'.format(lolp))
+    # Create DataFrame with all system states.
+    df = pd.DataFrame(data, columns=['g12_state', 'g3_state', 'tw_state',
+                                     'd_state', 'demand_met', 'probability'])
+
+    ####################################################################
+    # COMPUTE LOSS OF LOAD PROBABILITY
+    ####################################################################
+    # Grab and sum the probabilities of states which don't meet demand.
+    lolp = df[~df['demand_met']]['probability'].sum()
+
+    print('Loss of Load Probability: {:.4f}'.format(round(lolp, 4)))
+
+    ####################################################################
+    # COMPUTE FREQUENCY OF LOSS OF LOAD
+    ####################################################################
+    # I'm not happy with the efficiency/optimality of this section,
+    # but hey, it gets the job done and I don't have time to
+    # over-optimize.
+    #
+    # I'm going to use the matrix approach.
+    # f_f = U * A^bar * Q, where:
+    #
+    # f_f: frequency of failure
+    # U: row vector, u_i = 1 if i within failed states, else u_i = 0
+    # A^bar: transpose of transition rate matrix, but with 0's on the
+    #        diagonal.
+    # Q: column vector of state probabilities, except p_i = 0 if i is
+    #    within the failed states.
+
+    # Initialize the transition matrix for the entire system.
+    # NOTE: We really just want A^bar, so we won't actually fill in the
+    # diagonals at the end.
+    r_system = np.zeros([df.shape[0], df.shape[0]])
+
+    # Define columns of states.
+    state_cols = ['g12_state', 'g3_state', 'tw_state', 'd_state']
+
+    # Map the state columns to the transition rate matrices.
+    r_dict = {'g12_state': g12_r, 'g3_state': g3_r, 'tw_state': tw_r,
+              'd_state': d_r}
+
+    # Initialize a DataFrame that will shrink as we iterate, just to
+    # show I have a clue about efficiency despite the fact I haven't
+    # put much efficiency effort in so far. However, note that the
+    # overhead required to drop DataFrame rows as we go may be greater
+    # than just doing excessive iteration.
+    shrinking_df = df.copy(deep=True)
+
+    # Loop over each row of the DataFrame. I'm not claiming this is
+    # efficient, just trying to get the job done.
+    for i in df.index:
+        # Extract this row.
+        row = df.loc[i]
+
+        shrinking_df.drop(labels=i, axis=0, inplace=True)
+
+        # Take the absolute difference in states with remaining rows.
+        state_diff = (row[state_cols] - shrinking_df[state_cols]).abs()
+
+        # Get a mask so we pull rows that only change in one column.
+        mask = (state_diff > 0).sum(axis=1) == 1
+
+        # Extract the rows which only changed in one column.
+        one_col_change = shrinking_df[mask]
+
+        # Find the column which changed.
+        col_idx = state_diff[mask].idxmax(axis=1)
+
+        # Loop over rows in one_col_change and update r_system.
+        for j in one_col_change.index:
+            # Grab this column.
+            this_col = col_idx[j]
+
+            # Grab the appropriate transition rate matrix.
+            this_r = r_dict[this_col]
+
+            # Extract state indices for i and j.
+            s_i = row[this_col]
+            s_j = one_col_change.loc[j, this_col]
+
+            # Update r_system
+            r_system[i, j] = this_r[s_i, s_j]
+
+            # Update [j, i]
+            r_system[j, i] = this_r[s_j, s_i]
+
+    # We now have r_system, but with zero's on the diagonal.
+    a_bar = r_system.T
+
+    # Create the U vector.
+    u = np.zeros(df.shape[0])
+    u[~df['demand_met']] = 1
+
+    # Create the q vector.
+    q = np.copy(df['probability'].values)
+    q[~df['demand_met']] = 0
+
+    # Compute frequency of failure. NOTE: This will be in units of 1/hr.
+    f_f = np.matmul(np.matmul(u.T, a_bar), q)
+
+    print('Frequency of Load Loss: {:.4f}/year'.format(f_f * 8760))
+    pass
 
 
 if __name__ == '__main__':
