@@ -32,7 +32,7 @@ def time_to_event(*, rho, rn):
 
     :param rho: 1/rho is the mean of the exponential distribution to
            draw from.
-    :param rn: OPTIONAL. Random number on interval [0, 1)
+    :param rn: Random number on interval [0, 1)
 
     :returns Time to next event in units of rho.
 
@@ -113,18 +113,9 @@ class TwoStateComponent:
         # Whether component is up or down - start up.
         self.state = True
 
-        # Track a random number.
-        self.rn = self.get_rn()
-
-        # Track the previously drawn random number.
-        self.prev_rn = self.rn
-
         # Set the time to the next event. Note tte has both a getter and
         # a setter.
         self.tte = self.time_to_event()
-
-        # Set time since last event.
-        self.tse = 0
 
     def __repr__(self):
         return self.name
@@ -145,7 +136,7 @@ class TwoStateComponent:
     def tte(self, value):
         self._tte = value
 
-    def time_to_event(self, rn=None):
+    def time_to_event(self):
         """Compute the time to the next event, depending on self.state.
         """
         # Choose the rate based on state.
@@ -154,31 +145,19 @@ class TwoStateComponent:
         else:
             rate = self.repair_rate
 
-        # Default to using self.rn
-        if rn is None:
-            rn = self.rn
-
         # Draw tte.
-        tte = time_to_event(rn=rn, rho=rate)
-
-        # Update previous rn.
-        self.prev_rn = self.rn
-
-        # Redraw rn.
-        self.rn = self.get_rn()
+        tte = time_to_event(rn=self.random_state.rand(), rho=rate)
 
         # Return.
         return tte
 
-    def change_state_update_times(self):
-        """Flip self.state, update self.tte, reset self.tse."""
+    def change_state_update_tte(self):
+        """Flip self.state, update self.tte."""
         self.state = not self.state
         self.tte = self.time_to_event()
-        self.tse = 0
 
-    def update_times(self, delta):
-        """Update time to event (tte) and time since event (tse), given
-        a change in time (delta).
+    def update_tte(self, delta):
+        """Update time to event (tte) given a change in time (delta).
         """
         # Decrease tte.
         tte = self.tte - delta
@@ -191,13 +170,6 @@ class TwoStateComponent:
 
         # Set tte.
         self.tte = tte
-
-        # Increase tse.
-        self.tse = self.tse + delta
-
-    def get_rn(self):
-        """Method to get random number."""
-        return self.random_state.rand()
 
 
 class TransmissionLine(TwoStateComponent):
@@ -249,21 +221,9 @@ class TransmissionLine(TwoStateComponent):
     def tte(self):
         # If the weather's state has changed, we need to update our tte.
         if self.prev_weather_state != self.weather.state:
-            # Draw time_to_event based on the previously drawn random
-            # number.
-            tte = self.time_to_event(rn=self.prev_rn)
 
-            # Decrease the time to event by the time since event.
-            tte = tte - self.tse
-
-            # Zero it out if it's less than 0.
-            if tte < 0:
-                tte = 0
-                log.debug("Due to weather change, {}'s tte is now 0.".format(
-                    self.name))
-
-            # Assign (note this uses the setter to set self._tte).
-            self.tte = tte
+            # Draw new tte (note this uses the setter to set self._tte).
+            self.tte = self.time_to_event()
 
             # Reset the weather's previous state.
             self.prev_weather_state = self.weather.state
@@ -311,7 +271,7 @@ class Load:
 
         return tte
 
-    def change_state_update_times(self):
+    def change_state_update_tte(self):
         # Update index.
         idx = self.idx + 1
 
@@ -328,7 +288,7 @@ class Load:
         # Update tte.
         self.tte = self.time_to_event()
 
-    def update_times(self, delta):
+    def update_tte(self, delta):
         self.tte = self.tte - delta
 
 
@@ -466,8 +426,8 @@ def main():
         # Grab pre-event state of component.
         pre_event_state = components[0].state
 
-        # Toggle the state of the component and update it's tte and tse.
-        components[0].change_state_update_times()
+        # Toggle the state of the component and update it's tte.
+        components[0].change_state_update_tte()
 
         # Check to see if we've moved into a new year (hard-code 8760)
         if time > 8760:
@@ -502,9 +462,9 @@ def main():
             # We haven't crossed into a new year - increment the time.
             time += delta
 
-        # Update tte and tse for all other components.
+        # Update tte for all other components.
         for c in components[1:]:
-            c.update_times(delta)
+            c.update_tte(delta)
 
         # Log event.
         log_str = (
