@@ -16,10 +16,10 @@ with a static specification, and life will be better if I hard-code.
 import numpy as np
 import logging as log
 
-# For reproducible results, seed the generator.
+# For reproducible results, seed the random number generator.
 SEED = 42
 
-# Create module level logger.
+# Set log level and create module level logger.
 LOG_LEVEL = log.INFO
 log.basicConfig(level=LOG_LEVEL)
 
@@ -350,6 +350,7 @@ def main():
     ####################################################################
     # LOAD
     ####################################################################
+    # Not much to do, just initialize the object.
     load = Load()
 
     ####################################################################
@@ -385,11 +386,13 @@ def main():
     # Initialize variables for tracking convergence
     # tus --> time un-served
     tus_arr = np.array([])
+    # Compute the average tus for each time year.
+    tus_avg_arr = np.array([])
     year = 0
     cov_arr = np.array([])
 
     # Note that we have a "break" statement in the loop, so we'll loop
-    # for a large count.
+    # for some large, finite count.
     while it_count < 100000:
         # Sort components based on their time to event (tte). The
         # component with the shortest time to event will be in position
@@ -397,8 +400,11 @@ def main():
         # NOTE: This may be faster if we used a priority queue.
         components.sort(key=lambda x: x.tte)
 
+        # Extract the component with the minimum time to event.
+        this_component = components[0]
+
         # Grab time delta to next event
-        delta = components[0].tte
+        delta = this_component.tte
 
         # Sanity check:
         if delta < 0:
@@ -424,10 +430,10 @@ def main():
         prev_ls = ls
 
         # Grab pre-event state of component.
-        pre_event_state = components[0].state
+        pre_event_state = this_component.state
 
         # Toggle the state of the component and update it's tte.
-        components[0].change_state_update_tte()
+        this_component.change_state_update_tte()
 
         # Check to see if we've moved into a new year (hard-code 8760)
         if time > 8760:
@@ -446,8 +452,14 @@ def main():
             tus_arr = np.append(tus_arr, time_unserved)
             time_unserved = 0
 
+            # Compute the mean unserved time thus far, and append to the
+            # appropriate array. A running total would be more
+            # efficient, but oh well.
+            tus_avg = tus_arr.mean()
+            tus_avg_arr = np.append(tus_avg_arr, tus_avg)
+
             # Compute the estimated coefficient of variation.
-            cov = np.std(tus_arr) / np.mean(tus_arr)
+            cov = np.std(tus_avg_arr) / np.mean(tus_arr)
             cov_arr = np.append(cov_arr, cov)
 
             # Log.
@@ -469,8 +481,8 @@ def main():
         # Log event.
         log_str = (
             'At time {:.2f}, {} transitioned from {} to {}'
-            ).format(time, components[0].name, pre_event_state,
-                     components[0].state)
+            ).format(time, this_component.name, pre_event_state,
+                     this_component.state)
         log.debug(log_str)
 
         # Determine if we're able to meet load. ls --> "load_served"
