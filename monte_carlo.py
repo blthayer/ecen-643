@@ -496,9 +496,10 @@ def main():
 
     # Report final statistics.
     print('\n' + '*' * 80)
-    print('Loss of Load Probability: {:.4f}'.format(tus_arr.sum()/total_time))
-    print('Frequency of Load Loss: {:.4f}/year'.format(lol_count /
-                                                       (total_time/8760)))
+    print('Loss of Load Probability: {:.4f}'.format(
+        round(tus_arr.sum()/total_time, 4)))
+    print('Frequency of Load Loss: {:.4f}/year'.format(
+        round(lol_count / (total_time/8760), 4)))
     pass
 
 
