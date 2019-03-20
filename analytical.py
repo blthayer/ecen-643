@@ -79,7 +79,7 @@ def b_matrix(a):
     lines = str(a).replace('[', '').replace(']', '').splitlines()
     rv = [r'\begin{bmatrix}']
     rv += ['  ' + ' & '.join(l.split()) + r'\\' for l in lines]
-    rv +=  [r'\end{bmatrix}']
+    rv += [r'\end{bmatrix}']
     return '\n'.join(rv)
 
 
